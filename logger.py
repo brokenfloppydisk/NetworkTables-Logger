@@ -12,6 +12,7 @@ class TableLogger:
         self.data_frame = pd.DataFrame()
         self.has_timestamp = False
         self.smart_dash = None
+        self.logging_finished = False
     
     def update_timestamp(self):
         """ Update the current timestamp using perf_counter()
@@ -38,7 +39,7 @@ class TableLogger:
 
         return parser.parse_args()
 
-    async def main(self):
+    def main(self):
         """ Main function of the logger. 
 
         Initializes the NetworkTables client and gets values every 50 ms,
@@ -46,54 +47,13 @@ class TableLogger:
         """
         args = self.parse_args()
         
-        ip: str = args.IP
-        if len(ip) <= 4:
-            ip = f"roborio-{ip}-frc.local"
-
-        NetworkTables.initialize(server=ip)
-        self.smart_dash = NetworkTables.getTable("SmartDashboard")
-
-        keys = self.smart_dash.getKeys(0)
-
-        if "Timestamp" in keys:
-            self.has_timestamp = True
-
-        for key in keys:
-            self.current_values[key] = (self.smart_dash.getEntry[key],)
-        
-        self.log()
-
-        self.smart_dash.addEntryListener(self.value_changed)
+        self.initialize_logger(args.IP)    
 
         frame_time: float = args.check_time / 1000
 
-        async def check_key():
-            for i in range(frame_time//20):
-                await asyncio.sleep(20)
-                if keyboard.is_pressed(" "):
-                    return True
-            return False
+        asyncio.run(self.log(frame_time))
 
-        while True:
-            self.update_keys()
-            self.log()
-
-            # TODO: check every 20 ms instead of every frame_time
-            if keyboard.is_pressed(" "):
-                break
-
-            await asyncio.sleep(frame_time)
-        
-        output_directory: str = args.directory
-
-        if output_directory[-1] != "/":
-            output_directory += "/"
-
-        output_file = output_directory + "SDlog_" + time.strftime("%Y-%m-%d_%H:%M:%S") + ".csv"
-
-        print(f"Saving output to {output_file}.")
-
-        self.data_frame.to_csv(output_file)
+        self.output_to_csv(args.directory)
     
     def update_keys(self):
         """ Adds new keys to the key index if detected.
@@ -108,8 +68,29 @@ class TableLogger:
         """
         self.current_values[key] = value
 
-    def log(self):
-        """ Append all current values to the log dataframe.
+    def initialize_logger(self, ip: str):
+        """ Initialize the NetworkTables client and update the initial current_values.
+        """
+        if len(ip) <= 4:
+            ip = f"roborio-{ip}-frc.local"
+
+        NetworkTables.initialize(server=ip)
+        self.smart_dash = NetworkTables.getTable("SmartDashboard")
+
+        keys = self.smart_dash.getKeys(0)
+
+        if "Timestamp" in keys:
+            self.has_timestamp = True
+
+        for key in keys:
+            self.current_values[key] = (self.smart_dash.getEntry[key],)
+        
+        self.append_to_df()
+
+        self.smart_dash.addEntryListener(self.value_changed)
+
+    def append_to_df(self) -> None:
+        """ Append all current values to the log dataframe and print status to the user.
         """
         self.update_timestamp()
         curr_df = pd.DataFrame.from_dict(self.current_values, orient="columns")
@@ -117,7 +98,49 @@ class TableLogger:
             + "Now logging SmartDashboard values. Press SPACE to stop.\n"
             +f"Data on current frame:\n{curr_df}")
         self.data_frame = pd.concat([self.data_frame, curr_df], ignore_index=True)
+    
+    async def log(self, frame_time: float) -> None:
+        """ Append values to the dataframe and print the status to the user.
+        """
+        async def check_keyboard() -> None:
+            """ Check if the user has pressed space every 20 ms.
+                Exit if the user presses space.
+            """
+            while not self.logging_finished:
+                if keyboard.is_pressed(" "):
+                    self.logging_finished = True
+                await asyncio.sleep(0.02)
+
+        async def update_dataframe() -> None:
+            """ Update the keys and log value every frame_time
+            """
+            while not self.logging_finished:
+                self.update_keys()
+                self.append_to_df()
+                await asyncio.sleep(frame_time)
+
+        # Asynchronously run the two coroutines
+        await asyncio.gather(
+            check_keyboard(),
+            update_dataframe()
+        )
+
+        # Block until logging is done
+        while not self.logging_finished :
+            pass
+
+    def output_to_csv(self, output_directory: str) -> None:
+        """ Output the dataframe to a csv file (SDlog_TIMESTAMP.csv)
+        """
+        if output_directory[-1] != "/":
+            output_directory += "/"
+
+        output_file = output_directory + "SDlog_" + time.strftime("%Y-%m-%d_%H:%M:%S") + ".csv"
+
+        print(f"Saving output to {output_file}.")
+
+        self.data_frame.to_csv(output_file)
 
 if __name__ == "__main__":
     logger = TableLogger()
-    asyncio.run(logger.main())
+    logger.main()
