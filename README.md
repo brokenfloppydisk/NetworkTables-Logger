@@ -32,6 +32,4 @@ Example:
 
 This will connect to the networktables server at `roboRIO-687-frc.local` and output the log to the current directory as `SDlog_TIMESTAMP.csv`
 
-Note: Logs WILL NOT save if the program exits improperly, so do not call Ctrl+c.
-
 See the help message for more info. (`python logger.py --help`)
